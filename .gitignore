@@ -1,4 +1,5 @@
 data/LFW/
 data/us/
 LFW_Results.csv
-checkpoints/
+checkpoints/buffalo_l/
+checkpoints/buffalo_sc/*

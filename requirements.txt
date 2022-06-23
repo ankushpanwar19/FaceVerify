@@ -1,0 +1,4 @@
+onnx
+onnxruntime
+scikit-image
+opencv-python

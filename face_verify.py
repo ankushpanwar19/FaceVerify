@@ -88,8 +88,8 @@ if __name__=="__main__":
 	parser = argparse.ArgumentParser()
 
 	# train or test for this experiment
-	parser.add_argument('-i1', '--image_path1', required=True)
-	parser.add_argument('-i2', '--image_path2', required=True)
+	parser.add_argument('-i1', '--image_path1', default='data/Howard-1.jpg', required=False)
+	parser.add_argument('-i2', '--image_path2', default='data/Howard-2.jpg', required=False)
 	parser.add_argument('-t', '--threshold', default=0.3,type=float)
 
 	args = parser.parse_args()

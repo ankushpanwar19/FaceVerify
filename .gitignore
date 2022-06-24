@@ -3,3 +3,4 @@ data/us/
 LFW_Results.csv
 checkpoints/buffalo_l/
 checkpoints/buffalo_sc/*
+LFW_Results_tflite.csv

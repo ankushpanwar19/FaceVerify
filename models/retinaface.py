@@ -299,3 +299,146 @@ def get_retinaface(name, download=False, root='~/.insightface/models', **kwargs)
         return retinaface(_file)
 
 
+class FaceDetectProcessing():
+
+    def __init__(self):
+
+        self.input_std = 127.5
+        self.input_mean = 127.5
+        self.fmc = 3
+        self._feat_stride_fpn = [8, 16, 32]
+        self._num_anchors = 2
+        self.use_kps = True
+        
+    def preprocessing(self,img, input_size = None):
+
+        
+        im_ratio = float(img.shape[0]) / img.shape[1]
+        model_ratio = float(input_size[1]) / input_size[0]
+        if im_ratio>model_ratio:
+            new_height = input_size[1]
+            new_width = int(new_height / im_ratio)
+        else:
+            new_width = input_size[0]
+            new_height = int(new_width * im_ratio)
+        self.det_scale = float(new_height) / img.shape[0]
+        resized_img = cv2.resize(img, (new_width, new_height))
+        det_img = np.zeros( (input_size[1], input_size[0], 3), dtype=np.uint8 )
+        det_img[:new_height, :new_width, :] = resized_img
+
+        blob = cv2.dnn.blobFromImage(det_img, 1.0/self.input_std, input_size, (self.input_mean, self.input_mean, self.input_mean), swapRB=True)
+
+        return blob
+
+
+    def post_processing(self,img,blob,net_outs,threshold=0.5,max_num=1, metric='default'):
+
+
+        center_cache ={}
+        scores_list = []
+        bboxes_list = []
+        kpss_list = []
+
+        input_height = blob.shape[2]
+        input_width = blob.shape[3]
+
+        for idx, stride in enumerate(self._feat_stride_fpn):
+            scores = net_outs[idx]
+            bbox_preds = net_outs[idx+self.fmc]
+            bbox_preds = bbox_preds * stride
+            if self.use_kps:
+                kps_preds = net_outs[idx+self.fmc*2] * stride
+            height = input_height // stride
+            width = input_width // stride
+            K = height * width
+            key = (height, width, stride)
+
+            anchor_centers = np.stack(np.mgrid[:height, :width][::-1], axis=-1).astype(np.float32)
+            #print(anchor_centers.shape)
+
+            anchor_centers = (anchor_centers * stride).reshape( (-1, 2) )
+            anchor_centers = np.stack([anchor_centers]*self._num_anchors, axis=1).reshape( (-1,2) )
+            center_cache[key] = anchor_centers
+
+            pos_inds = np.where(scores>=threshold)[0]
+            bboxes = distance2bbox(anchor_centers, bbox_preds)
+            pos_scores = scores[pos_inds]
+            pos_bboxes = bboxes[pos_inds]
+            scores_list.append(pos_scores)
+            bboxes_list.append(pos_bboxes)
+            if self.use_kps:
+                kpss = distance2kps(anchor_centers, kps_preds)
+                #kpss = kps_preds
+                kpss = kpss.reshape( (kpss.shape[0], -1, 2) )
+                pos_kpss = kpss[pos_inds]
+                kpss_list.append(pos_kpss)
+        
+        # WE GET scores_list, bboxes_list, kpss_list
+
+        scores = np.vstack(scores_list)
+        scores_ravel = scores.ravel()
+        order = scores_ravel.argsort()[::-1]
+        bboxes = np.vstack(bboxes_list) / self.det_scale
+        if self.use_kps:
+            kpss = np.vstack(kpss_list) / self.det_scale
+        pre_det = np.hstack((bboxes, scores)).astype(np.float32, copy=False)
+        pre_det = pre_det[order, :]
+        keep = nms(pre_det)
+        det = pre_det[keep, :]
+        if self.use_kps:
+            kpss = kpss[order,:,:]
+            kpss = kpss[keep,:,:]
+        else:
+            kpss = None
+        if max_num > 0 and det.shape[0] > max_num:
+            area = (det[:, 2] - det[:, 0]) * (det[:, 3] -
+                                                    det[:, 1])
+            img_center = img.shape[0] // 2, img.shape[1] // 2
+            offsets = np.vstack([
+                (det[:, 0] + det[:, 2]) / 2 - img_center[1],
+                (det[:, 1] + det[:, 3]) / 2 - img_center[0]
+            ])
+            offset_dist_squared = np.sum(np.power(offsets, 2.0), 0)
+            if metric=='max':
+                values = area
+            else:
+                values = area - offset_dist_squared * 2.0  # some extra weight on the centering
+            bindex = np.argsort(
+                values)[::-1]  # some extra weight on the centering
+            bindex = bindex[0:max_num]
+            det = det[bindex, :]
+            if kpss is not None:
+                kpss = kpss[bindex, :]
+        return det, kpss
+
+
+def nms(dets,nms_thresh=0.4):
+    thresh = nms_thresh
+    x1 = dets[:, 0]
+    y1 = dets[:, 1]
+    x2 = dets[:, 2]
+    y2 = dets[:, 3]
+    scores = dets[:, 4]
+
+    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
+    order = scores.argsort()[::-1]
+
+    keep = []
+    while order.size > 0:
+        i = order[0]
+        keep.append(i)
+        xx1 = np.maximum(x1[i], x1[order[1:]])
+        yy1 = np.maximum(y1[i], y1[order[1:]])
+        xx2 = np.minimum(x2[i], x2[order[1:]])
+        yy2 = np.minimum(y2[i], y2[order[1:]])
+
+        w = np.maximum(0.0, xx2 - xx1 + 1)
+        h = np.maximum(0.0, yy2 - yy1 + 1)
+        inter = w * h
+        ovr = inter / (areas[i] + areas[order[1:]] - inter)
+
+        inds = np.where(ovr <= thresh)[0]
+        order = order[inds + 1]
+
+    return keep
+

@@ -2,3 +2,4 @@ onnx
 onnxruntime
 scikit-image
 opencv-python
+tensorflow
